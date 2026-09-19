@@ -167,34 +167,123 @@ def _ocr_pdf(pdf_path: Path) -> str:
     return "\n".join(lines)
 
 
+_MONTH_NAMES = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+_MIN_YEAR = 2015
+_MAX_YEAR = 2100
+
+
+def _valid_date(year: int, month: int, day: int) -> Optional[dt.date]:
+    if not (_MIN_YEAR <= year <= _MAX_YEAR):
+        return None
+    try:
+        return dt.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _try_month_name_dates(text: str) -> Optional[dt.date]:
+    """Matches 'September 1, 2026', 'Sep 1 2026', 'Sept. 01, 2026', with or
+    without a leading weekday, in any month-name case."""
+    pattern = re.compile(
+        r"\b(?:[A-Za-z]+,\s*)?"
+        r"([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b"
+    )
+    for m in pattern.finditer(text):
+        month_name, day_str, year_str = m.groups()
+        month = _MONTH_NAMES.get(month_name.lower())
+        if month is None:
+            continue
+        d = _valid_date(int(year_str), month, int(day_str))
+        if d:
+            return d
+    return None
+
+
+def _try_numeric_dates(text: str) -> Optional[dt.date]:
+    """Matches YYYY-MM-DD, YYYY/MM/DD, MM/DD/YYYY, DD/MM/YYYY, MM-DD-YYYY,
+    MM.DD.YYYY etc. Ambiguous day/month order is resolved by whichever
+    number can't possibly be a month (>12)."""
+    pattern = re.compile(r"\b(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})\b")
+    for m in pattern.finditer(text):
+        a, b, c = m.groups()
+        ai, bi, ci = int(a), int(b), int(c)
+        if len(a) == 4:  # YYYY-MM-DD or YYYY/MM/DD
+            d = _valid_date(ai, bi, ci)
+            if d:
+                return d
+            continue
+        if len(c) != 4:  # need a 4-digit year somewhere to be confident
+            continue
+        # a and b are day/month in some order, c is the year
+        if ai > 12 >= bi:
+            d = _valid_date(ci, bi, ai)  # DD-MM-YYYY
+        elif bi > 12 >= ai:
+            d = _valid_date(ci, ai, bi)  # MM-DD-YYYY
+        else:
+            d = _valid_date(ci, ai, bi)  # ambiguous - default to MM-DD-YYYY (North America)
+        if d:
+            return d
+    return None
+
+
+def _try_fuzzy_dateutil(text: str) -> Optional[dt.date]:
+    """Last resort: hand each of the first ~20 non-empty lines to
+    python-dateutil's fuzzy parser. Only lines that look date-ish (contain
+    a month name or date-like separators, and aren't a dollar-amount table
+    row) are tried, and the result is sanity-checked against a plausible
+    year range - never guessed silently, still surfaced as needing
+    confirmation by the caller."""
+    try:
+        from dateutil import parser as dateutil_parser
+    except ImportError:
+        return None
+
+    candidate_line_re = re.compile(
+        r"(?:\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b)|"
+        r"(?:\b(?:" + "|".join(_MONTH_NAMES) + r")[a-z]*\.?\s+\d{1,2}\b)",
+        re.I,
+    )
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for line in lines[:20]:
+        if "$" in line or line.count(".") > 2:
+            continue
+        if not candidate_line_re.search(line):
+            continue
+        try:
+            parsed = dateutil_parser.parse(line, fuzzy=True, default=dt.datetime(1904, 1, 1))
+        except (ValueError, OverflowError, TypeError):
+            continue
+        if parsed.year == 1904:  # default sentinel means no real year token was found
+            continue
+        d = _valid_date(parsed.year, parsed.month, parsed.day)
+        if d:
+            return d
+    return None
+
+
 def parse_date(text: str, source_hint: Optional[Path] = None) -> tuple[dt.date, bool]:
     """Return (date, from_url_fallback). Never trusts the filename.
 
-    from_url_fallback True means the date was decoded from Clover URL query
-    params rather than an explicit header - caller must confirm with the
-    user before proceeding (per CLAUDE.md section 1).
+    The second value is True whenever the date was NOT read from an
+    explicit, confident header match (Clover URL timestamp, or the
+    last-resort fuzzy scan) - the caller must confirm with the user before
+    proceeding (per CLAUDE.md section 1).
     """
     normalized = re.sub(r"[ \t]+", " ", text)
 
-    m = re.search(
-        r"\b([A-Z][a-z]+ \d{1,2},? \d{4})\b",
-        normalized,
-    )
-    if m:
-        for fmt in ("%B %d, %Y", "%B %d %Y"):
-            try:
-                return dt.datetime.strptime(m.group(1).replace(",", ""), fmt.replace(",", "")).date(), False
-            except ValueError:
-                continue
+    d = _try_month_name_dates(normalized)
+    if d:
+        return d, False
 
-    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", normalized)
-    if m:
-        return dt.date.fromisoformat(m.group(1)), False
-
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", normalized)
-    if m:
-        mm, dd, yyyy = (int(x) for x in m.groups())
-        return dt.date(yyyy, mm, dd), False
+    d = _try_numeric_dates(normalized)
+    if d:
+        return d, False
 
     m = re.search(r"[?&]startTimestamp=(\d{10,13})", text)
     if m:
@@ -203,9 +292,16 @@ def parse_date(text: str, source_hint: Optional[Path] = None) -> tuple[dt.date, 
             ts //= 1000
         return dt.datetime.utcfromtimestamp(ts).date(), True
 
+    d = _try_fuzzy_dateutil(normalized)
+    if d:
+        return d, True
+
+    preview = "\n".join(l for l in normalized.splitlines() if l.strip())[:600]
     raise ClarifyNeeded(
-        "Could not find an explicit date header in this report, and no "
-        "startTimestamp URL param was present either. Provide --date explicitly."
+        "Could not find a date anywhere in this report (checked month-name dates, "
+        "numeric dates, a Clover URL timestamp, and a fuzzy scan). Provide --date "
+        "explicitly, or share this preview so the date format can be added:\n"
+        f"--- first lines actually read from the file ---\n{preview}\n---"
     )
 
 
@@ -305,11 +401,12 @@ def extract(path: Path, date_override: Optional[dt.date] = None) -> DailyReport:
     if date_override is not None:
         report_date = date_override
     else:
-        report_date, from_url = parse_date(text, path)
-        if from_url:
+        report_date, needs_confirmation = parse_date(text, path)
+        if needs_confirmation:
             raise ClarifyNeeded(
-                f"'{path.name}' has no explicit date header; decoded {report_date.isoformat()} "
-                "from the Clover URL timestamp. Confirm with --date before proceeding."
+                f"'{path.name}' has no confident, explicit date header; best guess is "
+                f"{report_date.isoformat()} (from a URL timestamp or a fuzzy text scan). "
+                "Confirm with --date before proceeding."
             )
 
     totals = parse_summary_totals(text)

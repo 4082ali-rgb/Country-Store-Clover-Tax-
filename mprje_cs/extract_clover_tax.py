@@ -64,11 +64,12 @@ def extract(path: Path, no_tax_labels: list[str], date_override: Optional[dt.dat
     if date_override is not None:
         report_date = date_override
     else:
-        report_date, from_url = parse_date(text, path)
-        if from_url:
+        report_date, needs_confirmation = parse_date(text, path)
+        if needs_confirmation:
             raise ClarifyNeeded(
-                f"'{path.name}' has no explicit date header; decoded {report_date.isoformat()} "
-                "from the Clover URL timestamp. Confirm with --date before proceeding."
+                f"'{path.name}' has no confident, explicit date header; best guess is "
+                f"{report_date.isoformat()} (from a URL timestamp or a fuzzy text scan). "
+                "Confirm with --date before proceeding."
             )
 
     taxes, no_tax_amount, net_total = parse_tax_details(text, no_tax_labels)
