@@ -17,12 +17,22 @@ if errorlevel 1 (
 )
 
 echo.
-echo Installing optional OCR support (only needed if a Clover report ever
+echo Checking for optional OCR support (only needed if a Clover report ever
 echo turns out to be an image-only "Print to PDF" with no text layer)...
-python -m pip install --user -r requirements-ocr.txt
+python -c "import sys; sys.exit(0 if sys.version_info[:2] < (3, 13) else 1)" >nul 2>nul
 if errorlevel 1 (
-    echo OCR support could not be installed for this Python version - that's fine,
-    echo text-based Clover PDFs will still work. Only raster/image-only PDFs need OCR.
+    echo Skipping - OCR support does not yet support this Python version.
+    echo This is fine: text-based Clover PDFs work without it. If a report
+    echo ever needs OCR, install Python 3.11 or 3.12 and run SETUP again,
+    echo or ask for the report to be re-exported as a normal PDF/CSV instead.
+) else (
+    python -m pip install --user -r requirements-ocr.txt >nul 2>nul
+    if errorlevel 1 (
+        echo Skipping - could not install OCR support. Text-based Clover PDFs
+        echo still work fine without it.
+    ) else (
+        echo OCR support installed.
+    )
 )
 
 if not exist inbox mkdir inbox
