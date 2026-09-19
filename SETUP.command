@@ -15,6 +15,15 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo ""
+echo "Installing optional OCR support (only needed if a Clover report ever"
+echo "turns out to be an image-only 'Print to PDF' with no text layer)..."
+python3 -m pip install --user -r requirements-ocr.txt
+if [ $? -ne 0 ]; then
+    echo "OCR support could not be installed for this Python version - that's fine,"
+    echo "text-based Clover PDFs will still work. Only raster/image-only PDFs need OCR."
+fi
+
 mkdir -p inbox output
 
 echo ""

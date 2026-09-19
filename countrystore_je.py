@@ -34,6 +34,20 @@ def load_mapping() -> dict:
         return yaml.safe_load(f)
 
 
+def _normalize(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _is_tax_report(filename: str) -> bool:
+    n = _normalize(filename)
+    return "countrystoretax" in n or "clovertax" in n
+
+
+def _is_daily_report(filename: str) -> bool:
+    n = _normalize(filename)
+    return "countrystore" in n or "clover" in n
+
+
 def parse_date_arg(value: str) -> dt.date:
     for fmt in ("%d %B %Y", "%B %d %Y", "%B %d, %Y", "%Y-%m-%d", "%d-%m-%Y"):
         try:
@@ -105,11 +119,12 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     counter = journal.JournalCounter(STATE_PATH)
 
     files = [p for p in INBOX_DIR.iterdir() if p.is_file()]
-    daily_files = [p for p in files if "clovertax" not in p.name.lower() and "clover" in p.name.lower()]
-    tax_files = [p for p in files if "clovertax" in p.name.lower()]
+    daily_files = [p for p in files if _is_tax_report(p.name) is False and _is_daily_report(p.name)]
+    tax_files = [p for p in files if _is_tax_report(p.name)]
 
     if not daily_files and not tax_files:
-        print("No files matching 'Clover' / 'CloverTax' found in inbox/.")
+        print("No files matching 'Country Store' / 'Country Store Tax' (or 'Clover' / 'CloverTax') "
+              "found in inbox/.")
         return 0
 
     pairs: dict[dt.date, dict[str, Path]] = {}
