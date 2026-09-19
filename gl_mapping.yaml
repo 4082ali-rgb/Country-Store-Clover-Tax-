@@ -1,0 +1,198 @@
+# =============================================================================
+# Country Store GL mapping — the ONLY place account/Class/sign rules live.
+#
+# Nobody should ever need to touch countrystore_je.py or mprje_cs/*.py to fix
+# a mapping or add a brand-new Clover code. Edit THIS file instead.
+#
+# HOW TO ADD A NEW REVENUE CATEGORY
+# ----------------------------------
+# Under `revenue_classes:`, add a new key. The key must match the category
+# name EXACTLY as Clover prints it in the "Revenue Classes" table (case
+# sensitive is not required — matching is case-insensitive — but spelling
+# must match). Example:
+#
+#   "New Category Name":
+#     account: "3099 Revenue - Something New"   # exact QBO Chart of Accounts name
+#     class: "0030-COUNTRY STORE"                # QBO Class (almost always this)
+#     prefix: "New Category Name - "             # optional; only needed if this
+#                                                 # account name repeats elsewhere
+#                                                 # in the same entry, or if you
+#                                                 # always want a label (see
+#                                                 # description.always_label below)
+#
+# If Clover ever adds an account NOT in the QBO Chart of Accounts yet, do NOT
+# guess a number — get the real account name from QBO/accounting first, then
+# add it here. Until it exists here, unmapped lines fall back to
+# `unmapped_default` below and get flagged (never dropped, never silently
+# guessed).
+#
+# HOW TO ADD/CHANGE A TENDER TYPE
+# ----------------------------------
+# Under `tenders:`, same shape as above. `account` is a debit account (money
+# coming in via that tender). Match the tender name exactly as Clover prints
+# it in "Tender Types" / "Sales By Card Type".
+#
+# HOW TO ADD/CHANGE A TAX LINE
+# ----------------------------------
+# Under `taxes:`, one entry per tax row that appears in the Tax Details
+# table. "No Tax (0%)" rows are intentionally NOT mapped here — they are
+# informational only and never get their own GL line (already reflected in
+# revenue category Net Sales).
+#
+# SIGN CONVENTION
+# ----------------------------------
+# Everything in this file posts the "natural" way for Country Store:
+#   - Revenue categories & tax lines -> CREDIT
+#   - Tender lines (cards, cash, gift certs, room charge) -> DEBIT
+# Nothing here flips sign. If a future line item genuinely needs the
+# opposite of its category's default side, do NOT hack the code — add an
+# explicit `side: debit` / `side: credit` override key next to that entry
+# and note why in a comment right there.
+# =============================================================================
+
+class_default: "0030-COUNTRY STORE"
+
+# Country Store's own version of the "unmapped line" placeholder (see build
+# instructions section 8 / CLAUDE.md special cases). Never invented from
+# nothing — this is confirmed as the same default Accommodation uses.
+unmapped_default:
+  account: "3029 Miscellaneous Revenue"
+  class: "0030-COUNTRY STORE"
+  prefix: "Unclassified - "
+
+# Dedicated contra account for the ambiguous-refund special case (CLAUDE.md
+# section 4, "Refunds — the ambiguous/unclean case"). Debit this, never fold
+# a negative Unclassified figure into 3029.
+refunds_allowances:
+  account: "Refunds-Allowances"
+  class: "0030-COUNTRY STORE"
+  prefix: "Refunds-Allowances - "
+
+revenue_classes:
+  "Souvenirs":
+    account: "3018 Revenue - Souvenir"
+    class: "0030-COUNTRY STORE"
+
+  "Snacks":
+    account: "3014 Revenue - Snacks"
+    class: "0030-COUNTRY STORE"
+
+  "Non Alcoholic Beverages":
+    account: "3006 Revenue - Non-Alcoholic"
+    class: "0030-COUNTRY STORE"
+
+  "Alcohol Beverages":
+    account: "3003 Revenue - Liquor"
+    class: "0030-COUNTRY STORE"
+
+  "Grocery":
+    account: "3013 Revenue - Grocery"
+    class: "0030-COUNTRY STORE"
+
+  "Tobacco":
+    account: "3017 Revenue - Tobacco"
+    class: "0030-COUNTRY STORE"
+
+  "Ice":
+    account: "3020 Revenue - Ice"
+    class: "0030-COUNTRY STORE"
+
+  "Seasonal Items":
+    account: "3021 Revenue - Miscellaneous Retail"
+    class: "0030-COUNTRY STORE"
+    prefix: "Seasonal Items - "
+
+  "Hard Goods":
+    account: "3021 Revenue - Miscellaneous Retail"
+    class: "0030-COUNTRY STORE"
+    prefix: "Seasonal Items - "
+
+  # Confirmed exception: Prepared Foods posts to Pinewoods, NOT Country Store.
+  "Prepared Foods":
+    account: "3002 Revenue - Food"
+    class: "0020-PINEWOODS"
+
+  # Distinct from 3008 Wood Sales, which is used by other outlets.
+  "Firewood":
+    account: "3019 Revenue - Firewood - Country Store"
+    class: "0030-COUNTRY STORE"
+
+  "Unclassified":
+    account: "3029 Miscellaneous Revenue"
+    class: "0030-COUNTRY STORE"
+    prefix: "Unclassified - "
+
+tenders:
+  "Interac":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Debit - "
+
+  "Debit":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Debit - "
+
+  "Visa":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Visa - "
+
+  "MasterCard":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "MasterCard - "
+
+  "Mastercard":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "MasterCard - "
+
+  "Cash":
+    account: "1002 Petty Cash in safe"
+    class: "0030-COUNTRY STORE"
+    # No prefix - Cash never repeats, per CLAUDE.md.
+
+  "Gift Certificates":
+    account: "2005 Gift Certificates"
+    class: "0030-COUNTRY STORE"
+    prefix: "Gift Certificates - "
+
+  "Gift Certificate":
+    account: "2005 Gift Certificates"
+    class: "0030-COUNTRY STORE"
+    prefix: "Gift Certificates - "
+
+  "Room Charge":
+    account: "3051 ROOM CHARGE R/C"
+    class: "0030-COUNTRY STORE"
+    prefix: "Room Charge - "
+
+taxes:
+  "GST":
+    account: "2029 GST Charged on Sales"
+    class: "0030-COUNTRY STORE"
+
+  "PST":
+    account: "2035 PST 7% Charged on Sales"
+    class: "0030-COUNTRY STORE"
+
+  "Liquor Tax":
+    account: "2039 PST 10% Liquor Charged on Sales"
+    class: "0030-COUNTRY STORE"
+
+# Tax Details rows matching this pattern (case-insensitive) are informational
+# only and never get a GL line, per CLAUDE.md section 3.
+no_tax_labels:
+  - "No Tax"
+
+description:
+  # Full memo repeated on every line, per CLAUDE.md section 6:
+  #   "Country Store Daily Revenue {D Month YYYY}"
+  memo_template: "Country Store Daily Revenue {date}"
+  # When true, every line gets its prefix even if the account doesn't repeat
+  # in this particular entry. CLAUDE.md's default is false - Country Store
+  # only prefixes lines that need disambiguation (the three 1007 tender
+  # lines, Seasonal Items, Unclassified, Refunds-Allowances) or whose account
+  # actually repeats in that day's entry.
+  always_label: false

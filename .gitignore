@@ -1,0 +1,8 @@
+journal_state.json
+inbox/*
+!inbox/.gitkeep
+output/*
+!output/.gitkeep
+__pycache__/
+*.pyc
+.venv/
