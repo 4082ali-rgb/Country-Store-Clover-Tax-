@@ -1,8 +1,11 @@
 """Clover "Sales Overview" report -> structured data.
 
 Handles three input shapes, per CLAUDE.md section 1:
-  - A text-based PDF ("pdftotext -layout" works directly)
-  - A raster "Print to PDF" (no embedded fonts - rasterize + OCR)
+  - A text-based PDF (extracted directly via PyMuPDF - no system binaries
+    like poppler/pdftotext required, so this works out of the box on a
+    plain Windows install)
+  - A raster "Print to PDF" (no text layer - rasterize with PyMuPDF, then
+    OCR if the optional OCR package is installed)
   - Pasted webpage text/HTML (Full Report / Trends view copy-paste)
 
 Never guesses a number it can't find - raises ClarifyNeeded (which the CLI
@@ -13,8 +16,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-import subprocess
-import shutil
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from html import unescape
@@ -86,53 +87,81 @@ def _strip_html(raw: str) -> str:
     return text
 
 
-def _has_embedded_fonts(pdf_path: Path) -> bool:
-    if not shutil.which("pdffonts"):
-        return True  # assume yes, try pdftotext first
-    out = subprocess.run(["pdffonts", str(pdf_path)], capture_output=True, text=True)
-    lines = [l for l in out.stdout.splitlines() if l.strip() and not l.startswith("name") and not l.startswith("---")]
-    return len(lines) > 0
+def _import_fitz():
+    try:
+        import pymupdf as fitz  # type: ignore
+    except ImportError as exc:
+        raise ClarifyNeeded(
+            "PyMuPDF is not installed, so PDFs can't be read. Run SETUP first "
+            "(pip install -r requirements.txt)."
+        ) from exc
+    return fitz
+
+
+def _text_by_reading_order(page) -> str:
+    """Reconstruct a "-layout"-like reading order from word boxes: group
+    words into lines by y-position, then sort each line left to right."""
+    words = page.get_text("words")  # (x0, y0, x1, y1, word, block, line, word_no)
+    if not words:
+        return ""
+    words = sorted(words, key=lambda w: (round(w[1], 0), w[0]))
+    lines: list[list] = []
+    current_y = None
+    current_line: list = []
+    for w in words:
+        y = round(w[1], 0)
+        if current_y is None or abs(y - current_y) > 3:
+            if current_line:
+                lines.append(current_line)
+            current_line = [w]
+            current_y = y
+        else:
+            current_line.append(w)
+    if current_line:
+        lines.append(current_line)
+
+    out_lines = []
+    for line in lines:
+        line_sorted = sorted(line, key=lambda w: w[0])
+        out_lines.append(" ".join(w[4] for w in line_sorted))
+    return "\n".join(out_lines)
 
 
 def _load_pdf_text(pdf_path: Path) -> str:
-    if not shutil.which("pdftotext"):
-        raise ClarifyNeeded("pdftotext is not installed - run SETUP first.")
-    if _has_embedded_fonts(pdf_path):
-        out = subprocess.run(
-            ["pdftotext", "-layout", str(pdf_path), "-"],
-            capture_output=True, text=True,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout
-    # Raster fallback - OCR
+    fitz = _import_fitz()
+    with fitz.open(str(pdf_path)) as doc:
+        page_texts = [_text_by_reading_order(page) for page in doc]
+    text = "\n".join(page_texts)
+    if text.strip():
+        return text
+    # No text layer at all - this is a raster/"Print to PDF" report. Fall
+    # back to OCR (optional dependency - never installed by default).
     return _ocr_pdf(pdf_path)
 
 
 def _ocr_pdf(pdf_path: Path) -> str:
-    if not shutil.which("pdftoppm"):
-        raise ClarifyNeeded(
-            f"'{pdf_path.name}' has no text layer and pdftoppm is not installed for OCR fallback."
-        )
     try:
         from rapidocr_onnxruntime import RapidOCR  # type: ignore
     except ImportError as exc:
         raise ClarifyNeeded(
-            "This report needs OCR (no embedded text layer) but rapidocr-onnxruntime "
-            "is not installed. Run SETUP first."
+            f"'{pdf_path.name}' has no text layer (it looks like an image-only 'Print to "
+            "PDF' export) and OCR support isn't installed for this Python version. Either "
+            "re-export the report as a normal (non-flattened) PDF or CSV/Excel from Clover, "
+            "or install OCR support manually: pip install -r requirements-ocr.txt "
+            "(requires a Python version rapidocr-onnxruntime supports)."
         ) from exc
 
-    import tempfile
-
+    fitz = _import_fitz()
     engine = RapidOCR()
     lines: list[str] = []
-    with tempfile.TemporaryDirectory() as tmp:
-        prefix = str(Path(tmp) / "page")
-        subprocess.run(["pdftoppm", "-jpeg", "-r", "150", str(pdf_path), prefix], check=True)
-        for img_path in sorted(Path(tmp).glob("page*.jpg")):
-            result, _ = engine(str(img_path))
+    with fitz.open(str(pdf_path)) as doc:
+        for page in doc:
+            pix = page.get_pixmap(dpi=150)
+            img_bytes = pix.tobytes("png")
+            result, _ = engine(img_bytes)
             if result:
-                for _box, text, _score in result:
-                    lines.append(text)
+                for _box, ocr_text, _score in result:
+                    lines.append(ocr_text)
     if not lines:
         raise ClarifyNeeded(f"OCR produced no text for '{pdf_path.name}'.")
     return "\n".join(lines)
@@ -145,9 +174,11 @@ def parse_date(text: str, source_hint: Optional[Path] = None) -> tuple[dt.date, 
     params rather than an explicit header - caller must confirm with the
     user before proceeding (per CLAUDE.md section 1).
     """
+    normalized = re.sub(r"[ \t]+", " ", text)
+
     m = re.search(
         r"\b([A-Z][a-z]+ \d{1,2},? \d{4})\b",
-        text,
+        normalized,
     )
     if m:
         for fmt in ("%B %d, %Y", "%B %d %Y"):
@@ -156,11 +187,11 @@ def parse_date(text: str, source_hint: Optional[Path] = None) -> tuple[dt.date, 
             except ValueError:
                 continue
 
-    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", normalized)
     if m:
         return dt.date.fromisoformat(m.group(1)), False
 
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", text)
+    m = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", normalized)
     if m:
         mm, dd, yyyy = (int(x) for x in m.groups())
         return dt.date(yyyy, mm, dd), False
