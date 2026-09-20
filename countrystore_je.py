@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ STATE_PATH = ROOT / "journal_state.json"
 # Bumped on every fix. Printed on every run so it's never ambiguous whether
 # you're running the current code - if the number you see here doesn't
 # match what you were told to expect, you're running stale files, full stop.
-BUILD_VERSION = "2026-09-20.2"
+BUILD_VERSION = "2026-09-20.3"
 
 
 def load_mapping() -> dict:
@@ -40,19 +41,52 @@ def load_mapping() -> dict:
         return yaml.safe_load(f)
 
 
-def _normalize(name: str) -> str:
-    return "".join(ch for ch in name.lower() if ch.isalnum())
+def _edit_distance(a: str, b: str) -> int:
+    """Damerau-Levenshtein distance (insert/delete/substitute/adjacent-swap)
+    between two short words - pure stdlib, no dependency. Treats a swapped
+    pair of adjacent letters ("Sotre" for "Store") as a single edit, since
+    that's one of the most common typo shapes, not two substitutions."""
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    d = [[0] * (lb + 1) for _ in range(la + 1)]
+    for i in range(la + 1):
+        d[i][0] = i
+    for j in range(lb + 1):
+        d[0][j] = j
+    for i in range(1, la + 1):
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[la][lb]
+
+
+def _fuzzy_word_in_filename(filename: str, keyword: str) -> bool:
+    """True if any word in the filename is `keyword`, a typo of it (small
+    edit distance), or contains it as a substring - tolerates things like
+    "Counntry" for "country", "Sotre" for "store", "Taxx" for "tax", without
+    needing an exact spelling or any external dependency."""
+    words = re.split(r"[^a-z0-9]+", filename.lower())
+    max_dist = 1 if len(keyword) <= 5 else 2
+    for word in words:
+        if not word:
+            continue
+        if keyword in word or word in keyword:
+            return True
+        if abs(len(word) - len(keyword)) <= max_dist and _edit_distance(word, keyword) <= max_dist:
+            return True
+    return False
 
 
 def _is_tax_report(filename: str) -> bool:
-    n = _normalize(filename)
-    is_store_or_clover = "store" in n or "clover" in n
-    return "tax" in n and is_store_or_clover
+    is_store_or_clover = _fuzzy_word_in_filename(filename, "store") or _fuzzy_word_in_filename(filename, "clover")
+    return _fuzzy_word_in_filename(filename, "tax") and is_store_or_clover
 
 
 def _is_daily_report(filename: str) -> bool:
-    n = _normalize(filename)
-    return "store" in n or "clover" in n
+    return _fuzzy_word_in_filename(filename, "store") or _fuzzy_word_in_filename(filename, "clover")
 
 
 def parse_date_arg(value: str) -> dt.date:
