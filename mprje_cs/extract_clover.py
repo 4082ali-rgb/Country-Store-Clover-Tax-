@@ -189,10 +189,12 @@ def _valid_date(year: int, month: int, day: int) -> Optional[dt.date]:
 
 def _try_month_name_dates(text: str) -> Optional[dt.date]:
     """Matches 'September 1, 2026', 'Sep 1 2026', 'Sept. 01, 2026', with or
-    without a leading weekday, in any month-name case."""
+    without a leading weekday, in any month-name case - and also Clover's
+    own zero-space header rendering, e.g. 'Sep1,202612:00AM' (whitespace
+    between month/day/year is optional, not required)."""
     pattern = re.compile(
         r"\b(?:[A-Za-z]+,\s*)?"
-        r"([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b"
+        r"([A-Za-z]{3,9})\.?\s*(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})"
     )
     for m in pattern.finditer(text):
         month_name, day_str, year_str = m.groups()
@@ -305,8 +307,15 @@ def parse_date(text: str, source_hint: Optional[Path] = None) -> tuple[dt.date, 
     )
 
 
+def _flex_label_pattern(label: str) -> str:
+    """Build a regex for `label` that tolerates missing/extra whitespace -
+    Clover's PDF export sometimes concatenates header words with zero
+    spaces ("Taxes&Fees", "GrossSales") depending on where they render."""
+    return re.escape(label).replace(r"\ ", r"\s*")
+
+
 def _find_amount_after_label(text: str, label: str) -> Optional[Decimal]:
-    pattern = re.escape(label) + r"[^\d\-\(]{0,80}(" + MONEY_RE + r")"
+    pattern = _flex_label_pattern(label) + r"[^\d\-\(]{0,80}(" + MONEY_RE + r")"
     m = re.search(pattern, text, re.I)
     if not m:
         return None
@@ -334,64 +343,213 @@ def parse_summary_totals(text: str) -> dict:
     return out
 
 
-def parse_revenue_classes(text: str) -> tuple[dict, Optional[Decimal]]:
+# The Clover "Sales Overview" PDF export renders each table cell on its own
+# line (one value per line, not a single-line row) - a category record looks
+# like:
+#   Souvenirs
+#   127
+#   $1,552.20
+#   -$1.80
+#   $0.00
+#   $1,550.40
+#   40.91%
+#   $174.03
+#   $0.00
+# Column *order* can drift, but "Net Sales" is always immediately followed
+# by "% Net Sales" (it's literally computed from it) - so we anchor on the
+# %-sign token rather than counting columns. Category/tender names are also
+# sometimes truncated with a trailing ellipsis ("Non Alcohol..", "lce" for
+# "Ice") by the report's column width, so matching is done against a known
+# list of real Clover category/tender names, by exact match or by the
+# report's (possibly truncated) text being a prefix of the real name.
+
+KNOWN_REVENUE_CATEGORIES = [
+    "Souvenirs", "Snacks", "Non Alcoholic Beverages", "Alcohol Beverages",
+    "Grocery", "Tobacco", "Ice", "Seasonal Items", "Hard Goods",
+    "Prepared Foods", "Firewood", "Unclassified",
+]
+
+# Known text-extraction glyph artifacts for specific labels (confirmed by
+# inspecting a real export) - never a guess, just a literal alias.
+_CATEGORY_ALIASES = {"lce": "Ice"}
+
+KNOWN_CASH_AND_OTHER_TENDER_NAMES = ["Cash", "Gift Certificates", "Gift Certificate", "Room Charge"]
+KNOWN_CARD_TYPE_NAMES = ["Interac", "Debit", "Visa", "MasterCard", "Mastercard", "Amex", "American Express"]
+KNOWN_AGGREGATE_TENDER_NAMES = ["Credit Card", "Debit Card"]
+
+MONEY_TOKEN_RE = re.compile(r"^\(?-?\$?[\d,]+\.\d{2}\)?$")
+PERCENT_TOKEN_RE = re.compile(r"^-?\d+(\.\d+)?%$")
+
+
+def _split_name_and_rest(line: str, candidates: list) -> tuple:
+    """Return (matched_name, remaining_value_tokens) for a line, or
+    (None, None) if it doesn't start with a known name. Handles both
+    layouts seen in practice:
+      - one value per line (the real Clover PDF export): the whole line
+        IS the name, possibly truncated with an ellipsis ("Non Alcohol..",
+        "lce" for "Ice") - values follow on their own subsequent lines.
+      - a single-line tabular row (pasted text, older exports): the name
+        and its values all share one line ("Cash   448.36").
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None, None
+
+    all_candidates = list(candidates) + ["Total"]
+
+    cleaned_whole = stripped.rstrip(".").rstrip("…").strip()
+    if cleaned_whole in _CATEGORY_ALIASES and _CATEGORY_ALIASES[cleaned_whole] in candidates:
+        return _CATEGORY_ALIASES[cleaned_whole], []
+    low_whole = cleaned_whole.lower()
+    for c in all_candidates:
+        if c.lower() == low_whole:
+            return c, []
+    if len(low_whole) >= 3:
+        for c in all_candidates:
+            if c.lower().startswith(low_whole):
+                return c, []
+
+    low = stripped.lower()
+    best = None
+    for c in all_candidates:
+        cl = c.lower()
+        if low.startswith(cl) and (len(low) == len(cl) or not low[len(cl)].isalnum()):
+            if best is None or len(cl) > len(best.lower()):
+                best = c
+    if best:
+        rest = stripped[len(best):].strip()
+        return best, rest.split()
+
+    return None, None
+
+
+def _scan_records(lines: list, candidates: list) -> dict:
+    """Group lines into {matched_name: [value tokens]} records, anchored on
+    lines that (start with) a known name or the literal "Total" row."""
+    records: dict = {}
+    current_name = None
+    current_values: list = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        matched, rest_tokens = _split_name_and_rest(stripped, candidates)
+        if matched:
+            if current_name is not None:
+                records.setdefault(current_name, []).extend(current_values)
+            current_name = matched
+            current_values = list(rest_tokens)
+        elif current_name is not None:
+            current_values.extend(stripped.split())
+    if current_name is not None:
+        records.setdefault(current_name, []).extend(current_values)
+    return records
+
+
+def _net_sales_from_values(values: list) -> Optional[Decimal]:
+    for i, v in enumerate(values):
+        if i > 0 and PERCENT_TOKEN_RE.match(v) and MONEY_TOKEN_RE.match(values[i - 1]):
+            return _to_decimal(values[i - 1])
+    return None
+
+
+def _percent_value(values: list) -> Optional[Decimal]:
+    for v in values:
+        if PERCENT_TOKEN_RE.match(v):
+            return Decimal(v.rstrip("%"))
+    return None
+
+
+def _last_money(values: list) -> Optional[Decimal]:
+    for v in reversed(values):
+        if MONEY_TOKEN_RE.match(v):
+            return _to_decimal(v)
+    return None
+
+
+def _section(text: str, start_label: str, end_labels: list) -> Optional[str]:
+    pattern = _flex_label_pattern(start_label) + r"(.*?)(?:" + \
+        "|".join(_flex_label_pattern(e) for e in end_labels) + r"|\Z)"
+    m = re.search(pattern, text, re.S | re.I)
+    return m.group(1) if m else None
+
+
+def parse_revenue_classes(text: str) -> tuple:
     """Parse the Revenue Classes table: category name -> Net Sales.
 
-    Table rows look like (layout-preserved text):
-        Souvenirs        1234.56    45.6%
-    The category name is everything before the first dollar amount on the
-    line; the Net Sales figure is the first dollar amount; an optional
-    trailing percentage is captured separately (used for the missing-SKU
-    detection in build.py).
+    Net Sales is identified as the dollar value immediately preceding the
+    "% Net Sales" value in each category's record, regardless of how many
+    other columns the report shows either side of it.
     """
-    m = re.search(r"Revenue Classes(.*?)(?:Tender Types|Sales By Card Type|Tax Details|Taxes & Fees|\Z)",
-                  text, re.S | re.I)
-    if not m:
+    section = _section(text, "Revenue Classes",
+                        ["Sales By Card Type", "Tender Types", "Cash Deposits", "Cash Adjustments"])
+    if section is None:
         raise ClarifyNeeded("Could not find a 'Revenue Classes' table in the Clover report.")
-    section = m.group(1)
 
-    row_re = re.compile(
-        r"^(?!Total\b)([A-Za-z][A-Za-z /&\-]*?)\s+(" + MONEY_RE + r")\s*(-?[\d.]+%)?\s*$",
-        re.M,
-    )
+    lines = [l for l in section.splitlines() if l.strip()]
+    records = _scan_records(lines, KNOWN_REVENUE_CATEGORIES)
+
     categories: dict = {}
-    for row in row_re.finditer(section):
-        name = row.group(1).strip()
-        amount = _to_decimal(row.group(2))
-        categories[name] = amount
-
     pct_total = None
-    total_row = re.search(r"^Total\b.*?(" + MONEY_RE + r")\s*([\d.]+)%\s*$", section, re.M | re.I)
-    if total_row:
-        pct_total = Decimal(total_row.group(2))
+    for name, values in records.items():
+        if name == "Total":
+            pct_total = _percent_value(values)
+            continue
+        net = _net_sales_from_values(values)
+        if net is not None:
+            categories[name] = categories.get(name, Decimal("0.00")) + net
 
     if not categories:
-        raise ClarifyNeeded("Found a 'Revenue Classes' header but no category rows under it.")
+        raise ClarifyNeeded(
+            "Found a 'Revenue Classes' table but couldn't read any category's Net Sales figure. "
+            "Preview of that section:\n" + "\n".join(lines[:40])
+        )
     return categories, pct_total
 
 
 def parse_tenders(text: str) -> dict:
-    """Parse Tender Types / Sales By Card Type -> tender name -> Amount Collected."""
-    m = re.search(
-        r"(?:Tender Types|Sales By Card Type)(.*?)(?:Tax Details|Taxes & Fees|Unpaid Balance|\Z)",
-        text, re.S | re.I,
-    )
-    if not m:
-        raise ClarifyNeeded("Could not find a 'Tender Types' / 'Sales By Card Type' table in the Clover report.")
-    section = m.group(1)
-
-    row_re = re.compile(
-        r"^(?!Total\b)([A-Za-z][A-Za-z /&\-]*?)\s+(" + MONEY_RE + r")\s*(?:[\d.]+%)?\s*$",
-        re.M,
-    )
+    """Combine Amount Collected across Tender Types (Cash / Gift
+    Certificates / Room Charge) and Sales By Card Type (Interac / Visa /
+    MasterCard / ...). Falls back to Tender Types' own Credit Card / Debit
+    Card aggregate lines if no Sales By Card Type breakdown is present, so
+    the entry still balances either way."""
     tenders: dict = {}
-    for row in row_re.finditer(section):
-        name = row.group(1).strip()
-        amount = _to_decimal(row.group(2))
-        tenders[name] = tenders.get(name, Decimal("0.00")) + amount
+
+    end_labels = ["Sales By Card Type", "Revenue Classes", "Cash Deposits",
+                  "Cash Adjustments", "Tax Details", "Unpaid Balance"]
+    tender_section = _section(text, "Tender Types", end_labels)
+    card_section = _section(text, "Sales By Card Type", end_labels)
+
+    if card_section:
+        lines = [l for l in card_section.splitlines() if l.strip()]
+        for name, values in _scan_records(lines, KNOWN_CARD_TYPE_NAMES).items():
+            if name == "Total":
+                continue
+            amt = _last_money(values)
+            if amt is not None:
+                tenders[name] = tenders.get(name, Decimal("0.00")) + amt
+
+    if tender_section:
+        lines = [l for l in tender_section.splitlines() if l.strip()]
+        # If a separate Sales By Card Type breakdown already supplied the
+        # granular card amounts, only take Cash/Gift Certs/Room Charge here
+        # (skip Credit Card/Debit Card aggregates and any repeated card
+        # names to avoid double-counting). Otherwise, this table might
+        # itself list card brands directly (no separate breakdown table at
+        # all), or only aggregate Credit Card/Debit Card lines - accept
+        # either so the entry still balances.
+        names = KNOWN_CASH_AND_OTHER_TENDER_NAMES + (
+            [] if tenders else KNOWN_CARD_TYPE_NAMES + KNOWN_AGGREGATE_TENDER_NAMES
+        )
+        for name, values in _scan_records(lines, names).items():
+            if name == "Total":
+                continue
+            amt = _last_money(values)
+            if amt is not None:
+                tenders[name] = tenders.get(name, Decimal("0.00")) + amt
 
     if not tenders:
-        raise ClarifyNeeded("Found a tender table header but no tender rows under it.")
+        raise ClarifyNeeded("Could not find any tender/card-type amounts in the Clover report.")
     return tenders
 
 
