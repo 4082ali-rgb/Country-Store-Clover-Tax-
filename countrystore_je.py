@@ -40,12 +40,13 @@ def _normalize(name: str) -> str:
 
 def _is_tax_report(filename: str) -> bool:
     n = _normalize(filename)
-    return "countrystoretax" in n or "clovertax" in n
+    is_store_or_clover = "store" in n or "clover" in n
+    return "tax" in n and is_store_or_clover
 
 
 def _is_daily_report(filename: str) -> bool:
     n = _normalize(filename)
-    return "countrystore" in n or "clover" in n
+    return "store" in n or "clover" in n
 
 
 def parse_date_arg(value: str) -> dt.date:
