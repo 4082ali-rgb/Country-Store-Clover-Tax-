@@ -28,6 +28,11 @@ INBOX_DIR = ROOT / "inbox"
 OUTPUT_DIR = ROOT / "output"
 STATE_PATH = ROOT / "journal_state.json"
 
+# Bumped on every fix. Printed on every run so it's never ambiguous whether
+# you're running the current code - if the number you see here doesn't
+# match what you were told to expect, you're running stale files, full stop.
+BUILD_VERSION = "2026-09-20.1"
+
 
 def load_mapping() -> dict:
     with open(MAPPING_PATH, "r", encoding="utf-8") as f:
@@ -227,6 +232,7 @@ def cmd_reset_journal(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    print(f"Country Store JE builder - build {BUILD_VERSION}")
     parser = argparse.ArgumentParser(description="Country Store Daily Revenue JE builder")
     parser.add_argument("--inbox", action="store_true", help="Build every complete day sitting in inbox/")
     parser.add_argument("--dayend-report", help="Path to a single day's Clover Report")
@@ -235,9 +241,12 @@ def main() -> int:
     parser.add_argument("--date", help='Explicit report date, e.g. "7 September 2026" (overrides parsing)')
     parser.add_argument("--set-journal", metavar="JJxxxx", help="Store the next journal number")
     parser.add_argument("--reset-journal", action="store_true", help="Clear the stored journal number (asks to confirm)")
+    parser.add_argument("--version", action="store_true", help="Print the build version and exit")
 
     args = parser.parse_args()
 
+    if args.version:
+        return 0
     if args.set_journal:
         return cmd_set_journal(args)
     if args.reset_journal:
