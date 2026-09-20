@@ -480,6 +480,19 @@ def parse_revenue_classes(text: str) -> tuple:
     Net Sales is identified as the dollar value immediately preceding the
     "% Net Sales" value in each category's record, regardless of how many
     other columns the report shows either side of it.
+
+    A category name this code doesn't recognize would, under pure
+    anchor-based scanning, have no line of its own to start a record with -
+    its values would silently get appended onto whichever known category
+    happened to come right before it, corrupting that category's Net Sales
+    (the same failure mode as the "LiquorTax(10%)" tax-matching bug, just
+    one layer up). To prevent that, once at least one category has been
+    anchor-matched in the one-value-per-line PDF layout, its field count is
+    used to re-segment the whole table structurally (fixed lines per
+    record) so an unrecognized category still becomes its own record -
+    surfaced under its own (possibly truncated) name and flagged as an
+    unmapped placeholder by build.py - instead of vanishing into a
+    neighbor's total.
     """
     section = _section(text, "Revenue Classes",
                         ["Sales By Card Type", "Tender Types", "Cash Deposits", "Cash Adjustments"])
@@ -487,17 +500,64 @@ def parse_revenue_classes(text: str) -> tuple:
         raise ClarifyNeeded("Could not find a 'Revenue Classes' table in the Clover report.")
 
     lines = [l for l in section.splitlines() if l.strip()]
-    records = _scan_records(lines, KNOWN_REVENUE_CATEGORIES)
+    anchored = _scan_records(lines, KNOWN_REVENUE_CATEGORIES)
+
+    non_total_lengths = [len(v) for k, v in anchored.items() if k != "Total" and v]
+    if not non_total_lengths:
+        raise ClarifyNeeded(
+            "Found a 'Revenue Classes' table but couldn't read any category's Net Sales figure. "
+            "Preview of that section:\n" + "\n".join(lines[:40])
+        )
+
+    first_name_idx = None
+    for i, line in enumerate(lines):
+        matched, rest = _split_name_and_rest(line.strip(), KNOWN_REVENUE_CATEGORIES)
+        if matched and matched != "Total":
+            first_name_idx = i
+            one_value_per_line = (rest == [])
+            break
+
+    total_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().lower() == "total":
+            total_idx = i
+            break
 
     categories: dict = {}
     pct_total = None
-    for name, values in records.items():
-        if name == "Total":
-            pct_total = _percent_value(values)
-            continue
-        net = _net_sales_from_values(values)
-        if net is not None:
-            categories[name] = categories.get(name, Decimal("0.00")) + net
+
+    if first_name_idx is not None and one_value_per_line and total_idx is not None and total_idx > first_name_idx:
+        # A conservative field count: an unrecognized category swallowed
+        # into a neighbor makes that neighbor's record LONGER than normal,
+        # never shorter, so the minimum observed length is the true one.
+        field_count = min(non_total_lengths)
+        stride = field_count + 1
+        i = first_name_idx
+        while i < total_idx:
+            chunk = lines[i:i + stride]
+            if len(chunk) < stride:
+                break  # trailing partial chunk - leftover noise, ignore
+            name_line = chunk[0].strip()
+            value_lines = [v.strip() for v in chunk[1:]]
+            matched, _ = _split_name_and_rest(name_line, KNOWN_REVENUE_CATEGORIES)
+            net = _net_sales_from_values(value_lines)
+            key = matched if matched else name_line
+            if net is not None:
+                categories[key] = categories.get(key, Decimal("0.00")) + net
+            i += stride
+        total_chunk = lines[total_idx:total_idx + stride]
+        if len(total_chunk) == stride:
+            pct_total = _percent_value([v.strip() for v in total_chunk[1:]])
+    else:
+        # Single-line tabular layout (pasted text) - each row is
+        # self-contained, so the anchor-only pass is already reliable.
+        for name, values in anchored.items():
+            if name == "Total":
+                pct_total = _percent_value(values)
+                continue
+            net = _net_sales_from_values(values)
+            if net is not None:
+                categories[name] = categories.get(name, Decimal("0.00")) + net
 
     if not categories:
         raise ClarifyNeeded(

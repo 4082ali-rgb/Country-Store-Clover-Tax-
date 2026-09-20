@@ -135,16 +135,24 @@ def build_entry(
             "Flag for Beverly to assign a proper SKU/category. Not posted today."
         )
 
-    # Ambiguous-refund special case: negative Unclassified -> Refunds-Allowances debit.
+    # Ambiguous-refund special case: a category going negative (refund with
+    # no matching sale that period) -> Refunds-Allowances debit, never a
+    # negative revenue credit. CLAUDE.md's confirmed precedent is
+    # Unclassified specifically, but the same accounting treatment applies
+    # to any category - never silently emit a negative Credits figure.
     refunds_allowances_amount = Decimal("0.00")
-    if "Unclassified" in revenue_classes and revenue_classes["Unclassified"] < 0:
-        refunds_allowances_amount = -revenue_classes.pop("Unclassified")
-        flags.append(
-            f"'Unclassified' was negative (refund with no matching sale this period) - "
-            f"booked ${q(refunds_allowances_amount)} as a debit to Refunds-Allowances "
-            "instead of a negative revenue credit, per the Aug 8 precedent. Confirm this "
-            "matches the actual bank deposit if it hasn't been confirmed already."
-        )
+    for category in list(revenue_classes.keys()):
+        if revenue_classes[category] < 0:
+            negative_amount = -revenue_classes.pop(category)
+            refunds_allowances_amount += negative_amount
+            precedent = "per the Aug 8 precedent" if category == "Unclassified" else \
+                "extending the Aug 8 Unclassified precedent to this category"
+            flags.append(
+                f"'{category}' was negative (refund with no matching sale this period) - "
+                f"booked ${q(negative_amount)} as a debit to Refunds-Allowances instead of "
+                f"a negative revenue credit, {precedent}. Confirm this matches the actual "
+                "bank deposit if it hasn't been confirmed already."
+            )
 
     # --- Credit lines: revenue categories ---
     for category, amount in revenue_classes.items():
@@ -245,16 +253,27 @@ def build_entry(
         if not always_label and account_counts[line.account] <= 1 and not line.flag:
             line.prefix = ""
 
+    # Safety net: a negative Debit/Credit figure is never valid on its own
+    # line (it should have been redirected to Refunds-Allowances above, or
+    # this is a category/tender/tax this code didn't anticipate) - never
+    # silently write a nonsensical negative amount to the CSV.
+    for line in lines:
+        if line.debit < 0 or line.credit < 0:
+            raise ClarifyNeeded(
+                f"Line for account '{line.account}' has a negative amount "
+                f"(Debit {line.debit}, Credit {line.credit}) - this needs a human decision "
+                "on the correct treatment, same as the Unclassified/Refunds-Allowances case. "
+                "No CSV written."
+            )
+
     total_debits = q(sum((l.debit for l in lines), Decimal("0.00")))
     total_credits = q(sum((l.credit for l in lines), Decimal("0.00")))
 
     if total_debits != total_credits:
+        detail = "; ".join(checklist_notes) if checklist_notes else "no further diagnostics available"
         raise ClarifyNeeded(
             f"Entry does not balance: Debits {total_debits} != Credits {total_credits}. "
-            "Per the non-negotiable rule, no CSV is written. Diagnostic notes: "
-            + "; ".join(checklist_notes) if checklist_notes else
-            f"Entry does not balance: Debits {total_debits} != Credits {total_credits}. "
-            "No CSV written."
+            f"Per the non-negotiable rule, no CSV is written. Diagnostic notes: {detail}"
         )
 
     return BuildResult(

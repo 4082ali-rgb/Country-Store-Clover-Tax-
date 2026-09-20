@@ -21,6 +21,7 @@ import yaml
 
 from mprje_cs import extract_clover, extract_clover_tax, build, csv_writer, journal
 from mprje_cs.extract_clover import ClarifyNeeded
+from mprje_cs.csv_writer import CSVValidationError
 
 ROOT = Path(__file__).resolve().parent
 MAPPING_PATH = ROOT / "gl_mapping.yaml"
@@ -31,7 +32,7 @@ STATE_PATH = ROOT / "journal_state.json"
 # Bumped on every fix. Printed on every run so it's never ambiguous whether
 # you're running the current code - if the number you see here doesn't
 # match what you were told to expect, you're running stale files, full stop.
-BUILD_VERSION = "2026-09-20.1"
+BUILD_VERSION = "2026-09-20.2"
 
 
 def load_mapping() -> dict:
@@ -110,11 +111,18 @@ def cmd_single(args: argparse.Namespace) -> int:
     except ClarifyNeeded as exc:
         print(f"STOPPED - no CSV written: {exc}", file=sys.stderr)
         return 1
+    except CSVValidationError as exc:
+        print(f"STOPPED - CSV failed validation, nothing written: {exc}", file=sys.stderr)
+        return 1
 
     out_dir = OUTPUT_DIR / result.date.isoformat()
     out_csv = out_dir / f"CountryStore_{result.date.isoformat()}_{result.journal_no}.csv"
-    csv_writer.write(result, mapping.get("description", {}).get("memo_template",
-                                                                  "Country Store Daily Revenue {date}"), out_csv)
+    try:
+        csv_writer.write(result, mapping.get("description", {}).get("memo_template",
+                                                                      "Country Store Daily Revenue {date}"), out_csv)
+    except CSVValidationError as exc:
+        print(f"STOPPED - CSV failed validation, nothing written: {exc}", file=sys.stderr)
+        return 1
     _write_flags(result, out_dir)
     _report(result, out_csv)
     return 0
@@ -167,11 +175,18 @@ def cmd_inbox(args: argparse.Namespace) -> int:
         except ClarifyNeeded as exc:
             print(f"{date_.isoformat()}: STOPPED - no CSV written: {exc}", file=sys.stderr)
             continue
+        except CSVValidationError as exc:
+            print(f"{date_.isoformat()}: STOPPED - CSV failed validation, nothing written: {exc}", file=sys.stderr)
+            continue
 
         out_dir = OUTPUT_DIR / date_.isoformat()
         out_csv = out_dir / f"CountryStore_{date_.isoformat()}_{result.journal_no}.csv"
-        csv_writer.write(result, mapping.get("description", {}).get("memo_template",
-                                                                      "Country Store Daily Revenue {date}"), out_csv)
+        try:
+            csv_writer.write(result, mapping.get("description", {}).get("memo_template",
+                                                                          "Country Store Daily Revenue {date}"), out_csv)
+        except CSVValidationError as exc:
+            print(f"{date_.isoformat()}: STOPPED - CSV failed validation, nothing written: {exc}", file=sys.stderr)
+            continue
         _write_flags(result, out_dir)
         _report(result, out_csv)
 

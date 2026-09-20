@@ -148,6 +148,20 @@ tenders:
     class: "0030-COUNTRY STORE"
     prefix: "MasterCard - "
 
+  # Some days' reports don't break tenders down into Interac/Visa/MasterCard
+  # (no separate "Sales By Card Type" table) and only show these two
+  # aggregate lines under Tender Types. Same account either way - only the
+  # description label is coarser.
+  "Credit Card":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Credit Card - "
+
+  "Debit Card":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Debit Card - "
+
   "Cash":
     account: "1002 Petty Cash in safe"
     class: "0030-COUNTRY STORE"
