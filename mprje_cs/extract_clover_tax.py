@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
-from .extract_clover import ClarifyNeeded, _section, _last_money, load_text, parse_date
+from .extract_clover import ClarifyNeeded, _section, _last_money, _flex_label_pattern, load_text, parse_date
 
 
 @dataclass
@@ -39,33 +39,37 @@ KNOWN_TAX_NAMES = ["GST", "PST", "Liquor Tax", "No Tax", "HST", "QST"]
 
 def _split_tax_name_and_rest(line: str, known_names: list) -> tuple:
     """Like extract_clover._split_name_and_rest, but a tax row's name always
-    carries its own rate suffix ("GST (5%)", "Liquor Tax(10%)", inconsistent
-    spacing) which is stripped before matching. Handles both one-value-per-
-    line (real Clover PDF) and single-line tabular rows (pasted text)."""
+    carries its own rate suffix ("GST (5%)", "Liquor Tax(10%)", "LiquorTax(10%)"
+    with fully inconsistent spacing - some reports even drop the space
+    inside a two-word name entirely) which is stripped/tolerated before
+    matching. Handles both one-value-per-line (real Clover PDF) and
+    single-line tabular rows (pasted text)."""
     stripped = line.strip()
     if not stripped:
         return None, None
     all_names = known_names + ["Total"]
 
-    whole_base = re.sub(r"\s*\([^)]*\)\s*$", "", stripped).strip().lower()
+    # Whole-line match: strip a trailing rate suffix like "(5%)"/"(10%)"
+    # first, then compare tolerating missing/extra whitespace in the name.
+    whole_base = re.sub(r"\s*\([^)]*\)\s*$", "", stripped).strip()
     for name in all_names:
-        if name.lower() == whole_base:
+        if re.fullmatch(_flex_label_pattern(name), whole_base, re.I):
             return name, []
 
-    low = stripped.lower()
+    # Line starts with a known name (possibly with the rate suffix attached
+    # right after, with or without a space), followed by more content -
+    # the single-line tabular layout.
     best = None
+    best_end = 0
     for name in all_names:
-        nl = name.lower()
-        if low.startswith(nl):
-            after = low[len(nl):]
-            # allow an immediately-following rate suffix like "(10%)" with no space
-            after_stripped = re.sub(r"^\s*\([^)]*\)", "", after)
-            if after_stripped == "" or not after_stripped[0].isalnum():
-                if best is None or len(nl) > len(best.lower()):
-                    best = name
-                    best_after = after_stripped
+        pattern = r"^" + _flex_label_pattern(name) + r"\s*(?:\([^)]*\))?"
+        m = re.match(pattern, stripped, re.I)
+        if m and m.end() > best_end:
+            best = name
+            best_end = m.end()
     if best:
-        return best, best_after.strip().split()
+        rest = stripped[best_end:].strip()
+        return best, rest.split()
 
     return None, None
 
