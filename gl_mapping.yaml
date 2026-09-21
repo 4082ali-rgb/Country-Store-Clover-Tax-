@@ -53,12 +53,14 @@
 class_default: "0030-COUNTRY STORE"
 
 # Country Store's own version of the "unmapped line" placeholder (see build
-# instructions section 8 / CLAUDE.md special cases). Never invented from
-# nothing — this is confirmed as the same default Accommodation uses.
+# instructions section 8). Distinct from "Unclassified" (3029, a real
+# Clover category with its own confirmed meaning) - this is the fallback
+# for a line this code has never seen before and genuinely doesn't
+# understand. Always flagged in the description so it's easy to find and
+# fix by hand in QBO, or to add a real mapping for in this file.
 unmapped_default:
-  account: "3029 Miscellaneous Revenue"
+  account: "3001 Revenue"
   class: "0030-COUNTRY STORE"
-  prefix: "Unclassified - "
 
 # Dedicated contra account for the ambiguous-refund special case (CLAUDE.md
 # section 4, "Refunds — the ambiguous/unclean case"). Debit this, never fold
@@ -101,11 +103,13 @@ revenue_classes:
     account: "3021 Revenue - Miscellaneous Retail"
     class: "0030-COUNTRY STORE"
     prefix: "Seasonal Items - "
+    always_label: true
 
   "Hard Goods":
     account: "3021 Revenue - Miscellaneous Retail"
     class: "0030-COUNTRY STORE"
     prefix: "Seasonal Items - "
+    always_label: true
 
   # Confirmed exception: Prepared Foods posts to Pinewoods, NOT Country Store.
   "Prepared Foods":
@@ -121,6 +125,7 @@ revenue_classes:
     account: "3029 Miscellaneous Revenue"
     class: "0030-COUNTRY STORE"
     prefix: "Unclassified - "
+    always_label: true
 
 tenders:
   "Interac":

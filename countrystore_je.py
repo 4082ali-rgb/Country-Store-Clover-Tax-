@@ -38,7 +38,7 @@ STATE_PATH = ROOT / "journal_state.json"
 # partial extraction/overwrite), which the banner alone can't catch since
 # it only lives in this file - the parsing logic doing the actual work
 # lives in mprje_cs/, and that's the half that matters most.
-BUILD_VERSION = "2026-09-21.1"
+BUILD_VERSION = "2026-09-21.2"
 
 if mprje_cs.PACKAGE_VERSION != BUILD_VERSION:
     print(f"Country Store JE builder - build {BUILD_VERSION}")
@@ -121,7 +121,7 @@ def build_one_day(
     counter: journal.JournalCounter,
     explicit_journal_no: str | None,
     date_override: dt.date | None,
-) -> tuple[build.BuildResult, str]:
+) -> build.BuildResult:
     daily = extract_clover.extract(daily_path, date_override=date_override)
     tax = extract_clover_tax.extract(
         tax_path, mapping.get("no_tax_labels", ["No Tax"]), date_override=date_override or daily.date
@@ -142,10 +142,7 @@ def build_one_day(
         if not explicit_journal_no:
             counter.set_journal(journal_no)
         raise
-
-    memo_template = mapping.get("description", {}).get("memo_template", "Country Store Daily Revenue {date}")
-    text = csv_writer.render(result, memo_template)
-    return result, text
+    return result
 
 
 def cmd_single(args: argparse.Namespace) -> int:
@@ -154,7 +151,7 @@ def cmd_single(args: argparse.Namespace) -> int:
     date_override = parse_date_arg(args.date) if args.date else None
 
     try:
-        result, text = build_one_day(
+        result = build_one_day(
             Path(args.dayend_report), Path(args.tax_report), mapping, counter,
             args.journal_no, date_override,
         )
@@ -221,7 +218,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
             continue
 
         try:
-            result, _text = build_one_day(found["daily"], found["tax"], mapping, counter, None, date_)
+            result = build_one_day(found["daily"], found["tax"], mapping, counter, None, date_)
         except ClarifyNeeded as exc:
             print(f"{date_.isoformat()}: STOPPED - no CSV written: {exc}", file=sys.stderr)
             continue

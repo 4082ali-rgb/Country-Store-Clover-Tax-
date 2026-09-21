@@ -66,7 +66,15 @@ See `gl_mapping.yaml` for the authoritative, editable table. Summary:
 | Seasonal Items / Hard Goods | 3021 Revenue - Miscellaneous Retail | Prefix "Seasonal Items - " |
 | Prepared Foods | 3002 Revenue - Food | Class 0020-PINEWOODS, confirmed exception |
 | Firewood | 3019 Revenue - Firewood - Country Store | Distinct from 3008 Wood Sales |
-| Unclassified (normal case) | 3029 Miscellaneous Revenue | Prefix "Unclassified - "; only when it ties into Net Sales/Amount Collected cleanly |
+| Unclassified (normal case) | 3029 Miscellaneous Revenue | Prefix "Unclassified - ", always shown (confirmed against real QBO exports); only when it ties into Net Sales/Amount Collected cleanly |
+
+Any line this code genuinely doesn't recognize (a brand-new Clover
+category, tender, or tax) posts to **3001 Revenue** (`unmapped_default` in
+`gl_mapping.yaml`) instead — distinct from 3029, which is specifically
+"Unclassified," a real, expected category. The 3001 placeholder always
+carries the raw unrecognized name plus a `[FIRST-APPEARANCE CODE ...]`
+flag in the Description, so it's easy to find and fix by hand in QBO or to
+add a real mapping for in this file.
 
 **Tender/payment lines:**
 

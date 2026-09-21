@@ -33,6 +33,7 @@ class JELine:
     name: str = ""
     location: str = ""
     class_: str = "0030-COUNTRY STORE"
+    always_label: bool = False
 
 
 @dataclass
@@ -165,9 +166,10 @@ def build_entry(
                 account=fallback["account"],
                 debit=Decimal("0.00"),
                 credit=q(amount),
-                prefix=fallback.get("prefix", ""),
+                prefix=f"{category} - ",
                 flag=f"FIRST-APPEARANCE CODE {category} - best guess",
                 class_=fallback.get("class", class_default),
+                always_label=True,
             ))
             flags.append(f"Unmapped revenue category '{category}' (${q(amount)}) - posted to "
                          f"{fallback['account']} as a flagged placeholder. Add it to gl_mapping.yaml.")
@@ -178,6 +180,7 @@ def build_entry(
                 credit=q(amount),
                 prefix=entry.get("prefix", ""),
                 class_=entry.get("class", class_default),
+                always_label=entry.get("always_label", False),
             ))
 
     if refunds_allowances_amount > 0:
@@ -201,9 +204,10 @@ def build_entry(
                 account=fallback["account"],
                 debit=Decimal("0.00"),
                 credit=q(amount),
-                prefix=fallback.get("prefix", ""),
+                prefix=f"{tax_name} - ",
                 flag=f"FIRST-APPEARANCE CODE {tax_name} (tax) - best guess",
                 class_=fallback.get("class", class_default),
+                always_label=True,
             ))
             flags.append(f"Unmapped tax line '{tax_name}' (${q(amount)}) - posted to "
                          f"{fallback['account']} as a flagged placeholder. Add it to gl_mapping.yaml.")
@@ -214,6 +218,7 @@ def build_entry(
                 credit=q(amount),
                 prefix=entry.get("prefix", ""),
                 class_=entry.get("class", class_default),
+                always_label=entry.get("always_label", False),
             ))
 
     # --- Debit lines: tenders ---
@@ -240,17 +245,25 @@ def build_entry(
                 credit=Decimal("0.00"),
                 prefix=entry.get("prefix", ""),
                 class_=entry.get("class", class_default),
+                always_label=entry.get("always_label", False),
             ))
 
     # Disambiguate: only apply a line's prefix if its account repeats in this
-    # entry (or the mapping file's global always_label is set), per CLAUDE.md
+    # entry, the mapping file's global always_label is set, or this specific
+    # category/tender is marked always_label in gl_mapping.yaml (e.g.
+    # Seasonal Items and Unclassified - confirmed always labeled regardless
+    # of whether their account repeats, per real QBO exports), per CLAUDE.md
     # section 6 ("lines needing disambiguation ... get a short prefix").
-    always_label = mapping.get("description", {}).get("always_label", False)
+    global_always_label = mapping.get("description", {}).get("always_label", False)
     account_counts: dict = {}
     for line in lines:
         account_counts[line.account] = account_counts.get(line.account, 0) + 1
     for line in lines:
-        if not always_label and account_counts[line.account] <= 1 and not line.flag:
+        keep_prefix = (
+            global_always_label or line.always_label or line.flag
+            or account_counts[line.account] > 1
+        )
+        if not keep_prefix:
             line.prefix = ""
 
     # Safety net: a negative Debit/Credit figure is never valid on its own

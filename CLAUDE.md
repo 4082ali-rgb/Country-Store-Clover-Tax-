@@ -372,3 +372,20 @@ For each day:
   in `extract_clover.py` (e.g. `_CATEGORY_ALIASES = {"lce": "Ice"}`) —
   add new ones there, with a comment noting they're a confirmed artifact,
   not a guess.
+- `mprje_cs/__init__.py`'s `PACKAGE_VERSION` and `countrystore_je.py`'s
+  `BUILD_VERSION` are checked against each other on every run and must be
+  bumped together on every code change - a mismatch means the two came
+  from different downloads/extractions, and the program refuses to run
+  rather than silently executing stale logic under a fresh-looking banner.
+- The generic "this code doesn't recognize this line" placeholder account
+  is **3001 Revenue** (`unmapped_default` in `gl_mapping.yaml`), distinct
+  from 3029 Miscellaneous Revenue (which is specifically "Unclassified,"
+  a real, expected Clover category, not an unknown one). The placeholder
+  is always labeled with the raw unrecognized name in the Description, so
+  it's easy to find and fix by hand.
+- Seasonal Items and Unclassified are **always** labeled with their prefix
+  in the Description, regardless of whether their account happens to
+  repeat elsewhere in that day's entry (`always_label: true` on those two
+  entries in `gl_mapping.yaml`) - confirmed against real QBO exports for
+  Aug 30 and Aug 31 2026, both of which show the prefix even on a day
+  where no other line shares that account.
