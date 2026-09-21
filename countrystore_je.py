@@ -33,7 +33,7 @@ STATE_PATH = ROOT / "journal_state.json"
 # Bumped on every fix. Printed on every run so it's never ambiguous whether
 # you're running the current code - if the number you see here doesn't
 # match what you were told to expect, you're running stale files, full stop.
-BUILD_VERSION = "2026-09-20.3"
+BUILD_VERSION = "2026-09-21.1"
 
 
 def load_mapping() -> dict:

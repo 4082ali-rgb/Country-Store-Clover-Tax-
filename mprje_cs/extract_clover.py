@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from html import unescape
@@ -440,7 +441,18 @@ def _scan_records(lines: list, candidates: list) -> dict:
             current_name = matched
             current_values = list(rest_tokens)
         elif current_name is not None:
-            current_values.extend(stripped.split())
+            # One-value-per-line layout: an unmatched line is a single
+            # field (which may itself be a multi-word category name this
+            # code doesn't recognize, e.g. "Propane Firepits" - keep it as
+            # one token, don't split it into separate words). Single-line
+            # tabular layout: an unmatched row packs a name and its values
+            # onto one line together - only split when the line actually
+            # contains recognizable numeric tokens.
+            tokens = stripped.split()
+            if any(MONEY_TOKEN_RE.match(t) or PERCENT_TOKEN_RE.match(t) for t in tokens):
+                current_values.extend(tokens)
+            else:
+                current_values.append(stripped)
     if current_name is not None:
         records.setdefault(current_name, []).extend(current_values)
     return records
@@ -479,20 +491,27 @@ def parse_revenue_classes(text: str) -> tuple:
 
     Net Sales is identified as the dollar value immediately preceding the
     "% Net Sales" value in each category's record, regardless of how many
-    other columns the report shows either side of it.
+    other columns the report shows either side of it, or what order they
+    come in - this has been observed to vary (GrossSales/Discounts/Refunds
+    can come in a different order depending on the machine/PyMuPDF version
+    reading the PDF), but Net Sales is always the figure %NetSales is
+    computed from, so it's the one reliable anchor.
 
-    A category name this code doesn't recognize would, under pure
-    anchor-based scanning, have no line of its own to start a record with -
-    its values would silently get appended onto whichever known category
-    happened to come right before it, corrupting that category's Net Sales
-    (the same failure mode as the "LiquorTax(10%)" tax-matching bug, just
-    one layer up). To prevent that, once at least one category has been
-    anchor-matched in the one-value-per-line PDF layout, its field count is
-    used to re-segment the whole table structurally (fixed lines per
-    record) so an unrecognized category still becomes its own record -
-    surfaced under its own (possibly truncated) name and flagged as an
-    unmapped placeholder by build.py - instead of vanishing into a
-    neighbor's total.
+    A category name this code doesn't recognize has no line of its own to
+    start a record with under anchor-based scanning - its name and values
+    get appended onto whichever known category happened to come right
+    before it (the same failure mode as the "LiquorTax(10%)" tax-matching
+    bug, one layer up). Detected here as: that category's record ends up
+    noticeably longer than a normal one. When that happens, the excess is
+    peeled off in fixed-size groups (the modal/most-common record length)
+    and surfaced as its own record - flagged as an unmapped placeholder by
+    build.py - instead of silently corrupting the category it landed on.
+    This only ever touches a record that's already longer than normal; a
+    normal-length record is never rewritten, so it can't be corrupted by
+    the recovery logic itself (unlike an earlier version of this function,
+    which re-derived a single field count for the WHOLE table from the
+    shortest matched record and rebuilt everything from that - fragile to
+    any one record being short, which broke real reports).
     """
     section = _section(text, "Revenue Classes",
                         ["Sales By Card Type", "Tender Types", "Cash Deposits", "Cash Adjustments"])
@@ -508,56 +527,41 @@ def parse_revenue_classes(text: str) -> tuple:
             "Found a 'Revenue Classes' table but couldn't read any category's Net Sales figure. "
             "Preview of that section:\n" + "\n".join(lines[:40])
         )
-
-    first_name_idx = None
-    for i, line in enumerate(lines):
-        matched, rest = _split_name_and_rest(line.strip(), KNOWN_REVENUE_CATEGORIES)
-        if matched and matched != "Total":
-            first_name_idx = i
-            one_value_per_line = (rest == [])
-            break
-
-    total_idx = None
-    for i, line in enumerate(lines):
-        if line.strip().lower() == "total":
-            total_idx = i
-            break
+    # A genuinely clean (non-bloated) record has exactly one %NetSales
+    # token; a record that swallowed one or more unrecognized categories
+    # has two or more (each category's own row carries its own %). Prefer
+    # deriving the field count from clean records only - a plain length
+    # mode/min can be fooled by a small sample (e.g. only 2 categories,
+    # one bloated) into picking the bloated length as if it were normal.
+    clean_lengths = [
+        len(v) for k, v in anchored.items()
+        if k != "Total" and v and sum(1 for tok in v if PERCENT_TOKEN_RE.match(tok)) == 1
+    ]
+    field_count = Counter(clean_lengths or non_total_lengths).most_common(1)[0][0]
 
     categories: dict = {}
     pct_total = None
+    for name, values in anchored.items():
+        if name == "Total":
+            pct_total = _percent_value(values)
+            continue
 
-    if first_name_idx is not None and one_value_per_line and total_idx is not None and total_idx > first_name_idx:
-        # A conservative field count: an unrecognized category swallowed
-        # into a neighbor makes that neighbor's record LONGER than normal,
-        # never shorter, so the minimum observed length is the true one.
-        field_count = min(non_total_lengths)
-        stride = field_count + 1
-        i = first_name_idx
-        while i < total_idx:
-            chunk = lines[i:i + stride]
-            if len(chunk) < stride:
-                break  # trailing partial chunk - leftover noise, ignore
-            name_line = chunk[0].strip()
-            value_lines = [v.strip() for v in chunk[1:]]
-            matched, _ = _split_name_and_rest(name_line, KNOWN_REVENUE_CATEGORIES)
-            net = _net_sales_from_values(value_lines)
-            key = matched if matched else name_line
-            if net is not None:
-                categories[key] = categories.get(key, Decimal("0.00")) + net
-            i += stride
-        total_chunk = lines[total_idx:total_idx + stride]
-        if len(total_chunk) == stride:
-            pct_total = _percent_value([v.strip() for v in total_chunk[1:]])
-    else:
-        # Single-line tabular layout (pasted text) - each row is
-        # self-contained, so the anchor-only pass is already reliable.
-        for name, values in anchored.items():
-            if name == "Total":
-                pct_total = _percent_value(values)
-                continue
-            net = _net_sales_from_values(values)
-            if net is not None:
-                categories[name] = categories.get(name, Decimal("0.00")) + net
+        own_values = values[:field_count] if len(values) >= field_count else values
+        net = _net_sales_from_values(own_values)
+        if net is not None:
+            categories[name] = categories.get(name, Decimal("0.00")) + net
+
+        # Anything past the first `field_count` values wasn't this
+        # category's own data - peel it off in (name + field_count values)
+        # groups, each belonging to a category this code doesn't recognize.
+        leftover = values[field_count:]
+        while len(leftover) >= field_count + 1:
+            swallowed_name = leftover[0]
+            swallowed_values = leftover[1:1 + field_count]
+            leftover = leftover[1 + field_count:]
+            swallowed_net = _net_sales_from_values(swallowed_values)
+            if swallowed_net is not None:
+                categories[swallowed_name] = categories.get(swallowed_name, Decimal("0.00")) + swallowed_net
 
     if not categories:
         raise ClarifyNeeded(
