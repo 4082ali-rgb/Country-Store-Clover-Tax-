@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+import mprje_cs
 from mprje_cs import extract_clover, extract_clover_tax, build, csv_writer, journal
 from mprje_cs.extract_clover import ClarifyNeeded
 from mprje_cs.csv_writer import CSVValidationError
@@ -30,10 +31,25 @@ INBOX_DIR = ROOT / "inbox"
 OUTPUT_DIR = ROOT / "output"
 STATE_PATH = ROOT / "journal_state.json"
 
-# Bumped on every fix. Printed on every run so it's never ambiguous whether
-# you're running the current code - if the number you see here doesn't
-# match what you were told to expect, you're running stale files, full stop.
+# Bumped on every fix, in lockstep with mprje_cs.PACKAGE_VERSION. Printed on
+# every run so it's never ambiguous whether you're running the current
+# code. The two are checked against each other below: a mismatch means the
+# mprje_cs/ folder and countrystore_je.py came from different downloads (a
+# partial extraction/overwrite), which the banner alone can't catch since
+# it only lives in this file - the parsing logic doing the actual work
+# lives in mprje_cs/, and that's the half that matters most.
 BUILD_VERSION = "2026-09-21.1"
+
+if mprje_cs.PACKAGE_VERSION != BUILD_VERSION:
+    print(f"Country Store JE builder - build {BUILD_VERSION}")
+    print(
+        f"STOPPED - version mismatch: countrystore_je.py is build {BUILD_VERSION} but the "
+        f"mprje_cs/ folder next to it is build {mprje_cs.PACKAGE_VERSION}. These must come from "
+        "the SAME download/extraction. Delete this whole folder, extract a fresh copy of the "
+        "ZIP you were given, and run from there - do not copy just one file into an old folder.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def load_mapping() -> dict:
