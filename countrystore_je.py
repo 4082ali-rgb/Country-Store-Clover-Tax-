@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import re
 import shutil
 import sys
@@ -20,36 +21,67 @@ from pathlib import Path
 
 import yaml
 
-import mprje_cs
-from mprje_cs import extract_clover, extract_clover_tax, build, csv_writer, journal
-from mprje_cs.extract_clover import ClarifyNeeded
-from mprje_cs.csv_writer import CSVValidationError
-
 ROOT = Path(__file__).resolve().parent
 MAPPING_PATH = ROOT / "gl_mapping.yaml"
 INBOX_DIR = ROOT / "inbox"
 OUTPUT_DIR = ROOT / "output"
 STATE_PATH = ROOT / "journal_state.json"
 
-# Bumped on every fix, in lockstep with mprje_cs.PACKAGE_VERSION. Printed on
-# every run so it's never ambiguous whether you're running the current
-# code. The two are checked against each other below: a mismatch means the
-# mprje_cs/ folder and countrystore_je.py came from different downloads (a
-# partial extraction/overwrite), which the banner alone can't catch since
-# it only lives in this file - the parsing logic doing the actual work
-# lives in mprje_cs/, and that's the half that matters most.
-BUILD_VERSION = "2026-09-21.2"
+# Bumped on every fix. Printed on every run so it's never ambiguous whether
+# you're running the current code.
+BUILD_VERSION = "2026-09-22.1"
 
-if mprje_cs.PACKAGE_VERSION != BUILD_VERSION:
-    print(f"Country Store JE builder - build {BUILD_VERSION}")
-    print(
-        f"STOPPED - version mismatch: countrystore_je.py is build {BUILD_VERSION} but the "
-        f"mprje_cs/ folder next to it is build {mprje_cs.PACKAGE_VERSION}. These must come from "
-        "the SAME download/extraction. Delete this whole folder, extract a fresh copy of the "
-        "ZIP you were given, and run from there - do not copy just one file into an old folder.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
+# A hash of every file in mprje_cs/, computed fresh each release and baked
+# in here - NOT a hand-maintained version string. A version string only
+# catches staleness if every file that changed also had its string bumped
+# by hand, which is exactly what went wrong before (one file's marker was
+# current while the file that actually does the parsing was still an old
+# copy, and the mismatch check missed it because it only ever looked at
+# one file). Hashing every file in the folder catches ANY of them being
+# stale, individually, with no bookkeeping required.
+EXPECTED_PACKAGE_HASH = "55c52486943eb347"
+
+
+def _package_hash() -> str:
+    h = hashlib.sha256()
+    pkg_dir = ROOT / "mprje_cs"
+    for path in sorted(pkg_dir.glob("*.py")):
+        h.update(path.name.encode("utf-8"))
+        h.update(path.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _check_package_integrity() -> None:
+    pkg_dir = ROOT / "mprje_cs"
+    if not pkg_dir.is_dir():
+        print(f"Country Store JE builder - build {BUILD_VERSION}")
+        print(
+            f"STOPPED - the mprje_cs/ folder is missing from {ROOT}. countrystore_je.py must "
+            "sit next to the mprje_cs/ folder from the SAME download - don't copy this one file "
+            "out on its own.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    actual = _package_hash()
+    if actual != EXPECTED_PACKAGE_HASH:
+        print(f"Country Store JE builder - build {BUILD_VERSION}")
+        print(
+            f"STOPPED - the mprje_cs/ folder next to this script does not match what build "
+            f"{BUILD_VERSION} expects (expected hash {EXPECTED_PACKAGE_HASH}, found {actual}). "
+            "At least one file inside mprje_cs/ is from a different/older download than "
+            "countrystore_je.py. Delete this WHOLE folder, extract a fresh copy of the ZIP you "
+            "were given into a brand-new folder, and run from there - do not copy or merge "
+            "individual files between old and new folders.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+_check_package_integrity()
+
+from mprje_cs import extract_clover, extract_clover_tax, build, csv_writer, journal
+from mprje_cs.extract_clover import ClarifyNeeded
+from mprje_cs.csv_writer import CSVValidationError
 
 
 def load_mapping() -> dict:
