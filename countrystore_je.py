@@ -29,7 +29,7 @@ STATE_PATH = ROOT / "journal_state.json"
 
 # Bumped on every fix. Printed on every run so it's never ambiguous whether
 # you're running the current code.
-BUILD_VERSION = "2026-09-22.1"
+BUILD_VERSION = "2026-09-22.2"
 
 # A hash of every file in mprje_cs/, computed fresh each release and baked
 # in here - NOT a hand-maintained version string. A version string only
@@ -312,6 +312,20 @@ def cmd_set_journal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dump_text(args: argparse.Namespace) -> int:
+    """Diagnostic only: save the raw text this machine's PyMuPDF extracts
+    from a PDF, with zero parsing/interpretation. Used to compare what
+    actually gets read on one machine vs another when the same file
+    produces different results."""
+    src = Path(args.dump_text)
+    text = extract_clover.load_text(src)
+    out_path = src.with_name(src.stem + "_EXTRACTED.txt")
+    out_path.write_text(text, encoding="utf-8")
+    print(f"Wrote raw extracted text to: {out_path}")
+    print("Send that file back - it shows exactly what this machine reads from the PDF.")
+    return 0
+
+
 def cmd_reset_journal(args: argparse.Namespace) -> int:
     counter = journal.JournalCounter(STATE_PATH)
     current = counter.peek()
@@ -336,11 +350,15 @@ def main() -> int:
     parser.add_argument("--set-journal", metavar="JJxxxx", help="Store the next journal number")
     parser.add_argument("--reset-journal", action="store_true", help="Clear the stored journal number (asks to confirm)")
     parser.add_argument("--version", action="store_true", help="Print the build version and exit")
+    parser.add_argument("--dump-text", metavar="FILE.pdf",
+                         help="Diagnostic: save the raw text extracted from a PDF, no parsing, and exit")
 
     args = parser.parse_args()
 
     if args.version:
         return 0
+    if args.dump_text:
+        return cmd_dump_text(args)
     if args.set_journal:
         return cmd_set_journal(args)
     if args.reset_journal:
