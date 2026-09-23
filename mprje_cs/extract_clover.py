@@ -421,6 +421,36 @@ def _split_name_and_rest(line: str, candidates: list) -> tuple:
         rest = stripped[len(best):].strip()
         return best, rest.split()
 
+    # Single-line tabular row where the name itself is truncated
+    # mid-word by column width, with the ellipsis embedded before the
+    # numeric columns rather than at the very end of the line - e.g.
+    # "Alcohol … 28 $362.10 ...", "Non Alco… 150 $557.59 ...",
+    # "Prepared… 8 $50.75 ...", "Seasonal… 17 $245.87 ...". The whole-line
+    # prefix check above can't match these because the line doesn't END
+    # with the (truncated) name - numbers follow it on the same line.
+    # Only attempted when an ellipsis is actually present, to avoid ever
+    # touching an already-working, non-truncated single-line row.
+    if "…" in stripped:
+        tokens = stripped.split()
+        idx = None
+        for i, t in enumerate(tokens):
+            if MONEY_TOKEN_RE.match(t) or PERCENT_TOKEN_RE.match(t) or re.match(r"^\d+$", t):
+                idx = i
+                break
+        if idx:  # idx is None or 0 means no leading name tokens - skip
+            name_tokens = tokens[:idx]
+            if any("…" in t for t in name_tokens):
+                name_clean = " ".join(name_tokens).replace("…", "").strip()
+                if len(name_clean) >= 3:
+                    low_clean = name_clean.lower()
+                    best = None
+                    for c in candidates:
+                        if c.lower().startswith(low_clean):
+                            if best is None or len(c) > len(best):
+                                best = c
+                    if best:
+                        return best, tokens[idx:]
+
     return None, None
 
 

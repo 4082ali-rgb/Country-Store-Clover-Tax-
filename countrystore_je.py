@@ -29,7 +29,7 @@ STATE_PATH = ROOT / "journal_state.json"
 
 # Bumped on every fix. Printed on every run so it's never ambiguous whether
 # you're running the current code.
-BUILD_VERSION = "2026-09-22.2"
+BUILD_VERSION = "2026-09-23.1"
 
 # A hash of every file in mprje_cs/, computed fresh each release and baked
 # in here - NOT a hand-maintained version string. A version string only
@@ -39,7 +39,7 @@ BUILD_VERSION = "2026-09-22.2"
 # copy, and the mismatch check missed it because it only ever looked at
 # one file). Hashing every file in the folder catches ANY of them being
 # stale, individually, with no bookkeeping required.
-EXPECTED_PACKAGE_HASH = "55c52486943eb347"
+EXPECTED_PACKAGE_HASH = "cfa4c1456535618e"
 
 
 def _package_hash() -> str:
