@@ -454,10 +454,11 @@ def _split_name_and_rest(line: str, candidates: list) -> tuple:
     return None, None
 
 
-def _scan_records(lines: list, candidates: list) -> dict:
-    """Group lines into {matched_name: [value tokens]} records, anchored on
-    lines that (start with) a known name or the literal "Total" row."""
-    records: dict = {}
+def _scan_record_list(lines: list, candidates: list) -> list:
+    """Return [(matched_name, [value tokens])] in document order, one entry
+    per row. Rows that share a name (e.g. two MasterCard rows in Sales By
+    Card Type, one for debit and one for credit) are kept separate."""
+    records: list = []
     current_name = None
     current_values: list = []
     for line in lines:
@@ -467,7 +468,7 @@ def _scan_records(lines: list, candidates: list) -> dict:
         matched, rest_tokens = _split_name_and_rest(stripped, candidates)
         if matched:
             if current_name is not None:
-                records.setdefault(current_name, []).extend(current_values)
+                records.append((current_name, current_values))
             current_name = matched
             current_values = list(rest_tokens)
         elif current_name is not None:
@@ -484,7 +485,17 @@ def _scan_records(lines: list, candidates: list) -> dict:
             else:
                 current_values.append(stripped)
     if current_name is not None:
-        records.setdefault(current_name, []).extend(current_values)
+        records.append((current_name, current_values))
+    return records
+
+
+def _scan_records(lines: list, candidates: list) -> dict:
+    """Group lines into {matched_name: [value tokens]} records, anchored on
+    lines that (start with) a known name or the literal "Total" row. Repeated
+    names are merged; use _scan_record_list to keep each row."""
+    records: dict = {}
+    for name, values in _scan_record_list(lines, candidates):
+        records.setdefault(name, []).extend(values)
     return records
 
 
@@ -616,7 +627,9 @@ def parse_tenders(text: str) -> dict:
 
     if card_section:
         lines = [l for l in card_section.splitlines() if l.strip()]
-        for name, values in _scan_records(lines, KNOWN_CARD_TYPE_NAMES).items():
+        # Repeated card rows (e.g. two MasterCard rows) are summed, not
+        # overwritten - a confirmed Clover layout on Oct 19 and Oct 20 2026.
+        for name, values in _scan_record_list(lines, KNOWN_CARD_TYPE_NAMES):
             if name == "Total":
                 continue
             amt = _last_money(values)
