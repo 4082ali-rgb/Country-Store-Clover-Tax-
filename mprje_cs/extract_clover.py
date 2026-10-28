@@ -375,7 +375,7 @@ KNOWN_REVENUE_CATEGORIES = [
 _CATEGORY_ALIASES = {"lce": "Ice"}
 
 KNOWN_CASH_AND_OTHER_TENDER_NAMES = ["Cash", "Gift Certificates", "Gift Certificate", "Room Charge"]
-KNOWN_CARD_TYPE_NAMES = ["Interac", "Debit", "Visa", "MasterCard", "Mastercard", "Amex", "American Express"]
+KNOWN_CARD_TYPE_NAMES = ["Interac", "Debit", "Visa", "MasterCard", "Mastercard", "Discover", "Amex", "American Express"]
 KNOWN_AGGREGATE_TENDER_NAMES = ["Credit Card", "Debit Card"]
 
 MONEY_TOKEN_RE = re.compile(r"^\(?-?\$?[\d,]+\.\d{2}\)?$")

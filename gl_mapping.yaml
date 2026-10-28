@@ -167,6 +167,13 @@ tenders:
     class: "0030-COUNTRY STORE"
     prefix: "Debit Card - "
 
+  # Discover card: confirmed by user to post to the same 1007 receivable as
+  # Visa/MasterCard (Oct 25 2026).
+  "Discover":
+    account: "1007 Visa / Mstrcrd / Debit Receivable"
+    class: "0030-COUNTRY STORE"
+    prefix: "Discover - "
+
   "Cash":
     account: "1002 Petty Cash in safe"
     class: "0030-COUNTRY STORE"
